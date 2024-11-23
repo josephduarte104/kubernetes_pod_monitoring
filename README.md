@@ -2,17 +2,7 @@
 
 This project monitors Kubernetes pod resources and logs the data to a CSV file and a log file. It also provides a live plot of the resource usage.
 
-## Setup
 
-### 1. Create a `.env` file
-
-Create a `.env` file in the root directory of your project and add the following content:
-
-You can create a new file named `README.md` in the root directory of your project and add the above content to it.
-
-Sure, here is the `README.md` file content:
-
-```markdown
 # Pod Monitoring
 
 This project monitors Kubernetes pod resources and logs the data to a CSV file and a log file. It also provides a live plot of the resource usage.
@@ -25,6 +15,8 @@ Create a `.env` file in the root directory of your project and add the following
 
 ```
 KUBECONFIG=/path/to/your/kubeconfig
+NAMESPACE=<namespace to monitor>
+INTERVAL=<time in secinds to pull measurments>
 ```
 
 Replace `/path/to/your/kubeconfig` with the actual path to your Kubernetes configuration file.

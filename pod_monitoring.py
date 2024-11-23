@@ -1,5 +1,6 @@
 import time
 import csv
+import argparse
 from kubernetes import client, config
 import logging
 from logging.handlers import RotatingFileHandler
@@ -8,6 +9,11 @@ import threading
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from datetime import datetime
+import os
+from dotenv import load_dotenv  # Add this import
+
+# Load environment variables from .env file
+load_dotenv()
 
 def setup_logger(log_file):
     logger = logging.getLogger("PodMonitoringLogger")
@@ -36,12 +42,12 @@ def convert_memory_to_mb(memory):
     else:
         return int(memory) / (1024 * 1024)
 
-def monitor_pod_resources(logger, csv_file):
+def monitor_pod_resources(logger, csv_file, namespace):
     config.load_kube_config()
     metrics_client = client.CustomObjectsApi()
 
     pod_metrics = metrics_client.list_namespaced_custom_object(
-        "metrics.k8s.io", "v1beta1", "default", "pods"
+        "metrics.k8s.io", "v1beta1", namespace, "pods"
     )
     with open(csv_file, mode='a', newline='') as file:
         writer = csv.DictWriter(file, fieldnames=["Timestamp", "Namespace", "Pod", "Container", "CPU (millicores)", "Memory (MB)"])
@@ -50,7 +56,6 @@ def monitor_pod_resources(logger, csv_file):
             pod_name = pod['metadata']['name']
             containers = pod['containers']
             for container in containers:
-                # Correctly access 'usage' field
                 usage = container.get('usage', {})
                 cpu_millicores = convert_cpu_to_millicores(usage.get('cpu', '0'))
                 memory_mb = convert_memory_to_mb(usage.get('memory', '0'))
@@ -77,7 +82,6 @@ def live_plot(csv_file):
     ax_memory.set_xlabel('Time')
     fig.suptitle('Live Pod Resource Usage')
 
-    # Dictionary to hold time-series data for each pod
     pod_data = defaultdict(lambda: {'cpu': [], 'memory': [], 'time': []})
     global_time = 0
 
@@ -85,7 +89,6 @@ def live_plot(csv_file):
         nonlocal global_time
         global_time += 1
 
-        # Read new data from CSV
         new_data = defaultdict(lambda: {'cpu': 0, 'memory': 0})
         with open(csv_file, mode='r') as file:
             reader = csv.DictReader(file)
@@ -94,13 +97,11 @@ def live_plot(csv_file):
                 new_data[pod]['cpu'] = float(row['CPU (millicores)'])
                 new_data[pod]['memory'] = float(row['Memory (MB)'])
 
-        # Update pod data
         for pod, usage in new_data.items():
             pod_data[pod]['cpu'].append(usage['cpu'])
             pod_data[pod]['memory'].append(usage['memory'])
             pod_data[pod]['time'].append(global_time)
 
-        # Plot CPU and memory usage
         ax_cpu.clear()
         ax_memory.clear()
         ax_cpu.set_ylabel('CPU (millicores)')
@@ -109,16 +110,16 @@ def live_plot(csv_file):
         fig.suptitle('Live Pod Resource Usage')
 
         for pod, usage in pod_data.items():
-            if len(usage['time']) > 0:  # Only plot if data exists
+            if len(usage['time']) > 0:
                 ax_cpu.plot(usage['time'], usage['cpu'], label=f'{pod} CPU')
                 ax_memory.plot(usage['time'], usage['memory'], label=f'{pod} Memory')
 
-        # Add legends if there is valid data
         if pod_data:
             ax_cpu.legend(loc='upper left')
             ax_memory.legend(loc='upper left')
 
-    anim = FuncAnimation(fig, update, interval=5000)  # Assign to a variable
+    global anim
+    anim = FuncAnimation(fig, update, interval=5000)
     plt.show()
 
 def main():
@@ -128,12 +129,14 @@ def main():
     logger = setup_logger(log_file)
     write_csv_header(csv_file)
 
+    namespace = os.getenv('NAMESPACE')
+    interval = int(os.getenv('INTERVAL'))
+
     while True:
-        monitor_pod_resources(logger, csv_file)
-        time.sleep(30)
+        monitor_pod_resources(logger, csv_file, namespace)
+        time.sleep(interval)
 
 if __name__ == "__main__":
     plot_thread = threading.Thread(target=main)
     plot_thread.start()
     live_plot("/Users/jduarte/DevOps/k8smonitoring/pod_metrics.csv")
-
