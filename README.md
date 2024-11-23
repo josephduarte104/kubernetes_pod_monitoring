@@ -55,6 +55,8 @@ pod_monitoring.py
 
 This will start monitoring the pod resources and logging the data to the specified CSV and log files. It will also display a live plot of the resource usage.
 
+![alt text](image.png)
+
 ## Files
 
 - `pod_monitoring.py`: The main script that monitors pod resources and logs the data.
