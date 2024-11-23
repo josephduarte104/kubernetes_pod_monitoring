@@ -1,0 +1,8 @@
+# Ignore log files
+*.log
+
+# Ignore CSV files
+*.csv
+
+# Ignore environment files
+.env
