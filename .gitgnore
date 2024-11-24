@@ -8,5 +8,3 @@
 .env
 
 /.venv
-/pod_metrics.csv
-/pod_metrics.log
