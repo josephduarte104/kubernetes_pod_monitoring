@@ -6,22 +6,46 @@ import logging
 from logging.handlers import RotatingFileHandler
 from matplotlib.animation import FuncAnimation
 import threading
+import matplotlib
+matplotlib.use('Agg')  # Use the Agg backend for non-interactive plotting
 import matplotlib.pyplot as plt
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime
 import os
-from dotenv import load_dotenv  # Add this import
+from dotenv import load_dotenv
+from flask import Flask, render_template, send_file
+from flask_socketio import SocketIO, emit
+import io
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 # Load environment variables from .env file
 load_dotenv()
 
+NAMESPACE = os.getenv('NAMESPACE', 'default')
+INTERVAL = int(os.getenv('INTERVAL', 5))
+
+app = Flask(__name__)
+socketio = SocketIO(app)
+
+# Historical metrics storage
+history_length = 10  # Number of data points to keep
+cpu_history = defaultdict(lambda: deque(maxlen=history_length))
+memory_history = defaultdict(lambda: deque(maxlen=history_length))
+timestamps = deque(maxlen=history_length)
+
+# Logging setup
 def setup_logger(log_file):
     logger = logging.getLogger("PodMonitoringLogger")
     logger.setLevel(logging.INFO)
     handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger
 
+logger = setup_logger('pod_monitoring.log')
+
+# Convert Kubernetes CPU/memory formats to usable numbers
 def convert_cpu_to_millicores(cpu):
     if cpu.endswith('n'):
         return int(cpu[:-1]) / 1_000_000
@@ -32,7 +56,7 @@ def convert_cpu_to_millicores(cpu):
     else:
         return int(cpu) * 1000
 
-def convert_memory_to_mb(memory):
+def convert_memory_to_mib(memory):
     if memory.endswith('Ki'):
         return int(memory[:-2]) / 1024
     elif memory.endswith('Mi'):
@@ -40,103 +64,92 @@ def convert_memory_to_mb(memory):
     elif memory.endswith('Gi'):
         return int(memory[:-2]) * 1024
     else:
-        return int(memory) / (1024 * 1024)
+        return int(memory)
 
-def monitor_pod_resources(logger, csv_file, namespace):
+# Fetch pod metrics from the Kubernetes API
+def get_pod_metrics():
     config.load_kube_config()
-    metrics_client = client.CustomObjectsApi()
+    custom_api = client.CustomObjectsApi()
+    try:
+        metrics = custom_api.list_namespaced_custom_object(
+            group="metrics.k8s.io",
+            version="v1beta1",
+            namespace=NAMESPACE,
+            plural="pods"
+        )
+        data = defaultdict(lambda: {'cpu': 0, 'memory': 0})
+        for item in metrics['items']:
+            pod_name = item['metadata']['name']
+            for container in item['containers']:
+                data[pod_name]['cpu'] += convert_cpu_to_millicores(container['usage']['cpu'])
+                data[pod_name]['memory'] += convert_memory_to_mib(container['usage']['memory'])
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching pod metrics: {e}")
+        return {}
 
-    pod_metrics = metrics_client.list_namespaced_custom_object(
-        "metrics.k8s.io", "v1beta1", namespace, "pods"
-    )
-    with open(csv_file, mode='a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=["Timestamp", "Namespace", "Pod", "Container", "CPU (millicores)", "Memory (MB)"])
-        for pod in pod_metrics['items']:
-            namespace = pod['metadata']['namespace']
-            pod_name = pod['metadata']['name']
-            containers = pod['containers']
-            for container in containers:
-                usage = container.get('usage', {})
-                cpu_millicores = convert_cpu_to_millicores(usage.get('cpu', '0'))
-                memory_mb = convert_memory_to_mb(usage.get('memory', '0'))
-                log_entry = {
-                    "Timestamp": datetime.now().isoformat(),
-                    "Namespace": namespace,
-                    "Pod": pod_name,
-                    "Container": container['name'],
-                    "CPU (millicores)": cpu_millicores,
-                    "Memory (MB)": memory_mb
-                }
-                logger.info(log_entry)
-                writer.writerow(log_entry)
+# Update metrics history
+def update_metrics():
+    metrics = get_pod_metrics()
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    timestamps.append(timestamp)
+    for pod_name, data in metrics.items():
+        cpu_history[pod_name].append(data['cpu'])
+        memory_history[pod_name].append(data['memory'])
+    logger.info(f"Metrics updated at {timestamp}")
 
-def write_csv_header(csv_file):
-    with open(csv_file, mode='w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=["Timestamp", "Namespace", "Pod", "Container", "CPU (millicores)", "Memory (MB)"])
-        writer.writeheader()
-
-def live_plot(csv_file):
-    fig, (ax_cpu, ax_memory) = plt.subplots(2, 1, sharex=True)
-    ax_cpu.set_ylabel('CPU (millicores)')
-    ax_memory.set_ylabel('Memory (MB)')
-    ax_memory.set_xlabel('Time')
-    fig.suptitle('Live Pod Resource Usage')
-
-    pod_data = defaultdict(lambda: {'cpu': [], 'memory': [], 'time': []})
-    global_time = 0
-
-    def update(_):
-        nonlocal global_time
-        global_time += 1
-
-        new_data = defaultdict(lambda: {'cpu': 0, 'memory': 0})
-        with open(csv_file, mode='r') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                pod = row['Pod']
-                new_data[pod]['cpu'] = float(row['CPU (millicores)'])
-                new_data[pod]['memory'] = float(row['Memory (MB)'])
-
-        for pod, usage in new_data.items():
-            pod_data[pod]['cpu'].append(usage['cpu'])
-            pod_data[pod]['memory'].append(usage['memory'])
-            pod_data[pod]['time'].append(global_time)
-
-        ax_cpu.clear()
-        ax_memory.clear()
-        ax_cpu.set_ylabel('CPU (millicores)')
-        ax_memory.set_ylabel('Memory (MB)')
-        ax_memory.set_xlabel('Time')
-        fig.suptitle('Live Pod Resource Usage')
-
-        for pod, usage in pod_data.items():
-            if len(usage['time']) > 0:
-                ax_cpu.plot(usage['time'], usage['cpu'], label=f'{pod} CPU')
-                ax_memory.plot(usage['time'], usage['memory'], label=f'{pod} Memory')
-
-        if pod_data:
-            ax_cpu.legend(loc='upper left')
-            ax_memory.legend(loc='upper left')
-
-    global anim
-    anim = FuncAnimation(fig, update, interval=5000)
-    plt.show()
-
-def main():
-    log_file = "/Users/jduarte/DevOps/k8smonitoring/pod_metrics.log"
-    csv_file = "/Users/jduarte/DevOps/k8smonitoring/pod_metrics.csv"
-
-    logger = setup_logger(log_file)
-    write_csv_header(csv_file)
-
-    namespace = os.getenv('NAMESPACE')
-    interval = int(os.getenv('INTERVAL'))
-
+# Periodic update thread
+def periodic_update():
     while True:
-        monitor_pod_resources(logger, csv_file, namespace)
-        time.sleep(interval)
+        update_metrics()
+        time.sleep(INTERVAL)
 
-if __name__ == "__main__":
-    plot_thread = threading.Thread(target=main)
-    plot_thread.start()
-    live_plot("/Users/jduarte/DevOps/k8smonitoring/pod_metrics.csv")
+# Flask routes for rendering graphs
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/live-graph-cpu')
+def live_graph_cpu():
+    update_metrics()  # Ensure metrics are up-to-date
+    fig, ax = plt.subplots(figsize=(10, 5))  # Adjust size as needed
+    for pod_name, cpu_usage in cpu_history.items():
+        ax.plot(timestamps, cpu_usage, label=pod_name)
+    ax.set_xlabel('Time', fontsize=12)
+    ax.set_ylabel('CPU Usage (millicores)', fontsize=12)
+    ax.legend(loc='upper left', fontsize=10)
+    plt.xticks(rotation=45, ha='right')  # Rotate x-axis labels for better visibility
+    plt.tight_layout(pad=2.0)  # Adjust padding to prevent cutoff
+    canvas = FigureCanvas(fig)
+    img = io.BytesIO()
+    canvas.print_png(img)
+    img.seek(0)
+    plt.close(fig)  # Close the figure to free memory
+    return send_file(img, mimetype='image/png')
+
+@app.route('/live-graph-memory')
+def live_graph_memory():
+    update_metrics()  # Ensure metrics are up-to-date
+    fig, ax = plt.subplots(figsize=(10, 5))  # Adjust size as needed
+    for pod_name, memory_usage in memory_history.items():
+        ax.plot(timestamps, memory_usage, label=pod_name)
+    ax.set_xlabel('Time', fontsize=12)
+    ax.set_ylabel('Memory Usage (Mi)', fontsize=12)
+    ax.legend(loc='upper left', fontsize=10)
+    plt.xticks(rotation=45, ha='right')  # Rotate x-axis labels for better visibility
+    plt.tight_layout(pad=2.0)  # Adjust padding to prevent cutoff
+    canvas = FigureCanvas(fig)
+    img = io.BytesIO()
+    canvas.print_png(img)
+    img.seek(0)
+    plt.close(fig)  # Close the figure to free memory
+    return send_file(img, mimetype='image/png')
+
+
+@socketio.on('connect')
+def handle_connect():
+    emit('response', {'data': 'Connected'})
+
+if __name__ == '__main__':
+    threading.Thread(target=periodic_update, daemon=True).start()
+    socketio.run(app, debug=True)
