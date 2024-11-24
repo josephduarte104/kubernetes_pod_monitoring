@@ -1,4 +1,5 @@
-kubernetes
-matplotlib
-python-dotenv
-argparse
+kubernetes==12.0.1
+python-dotenv==0.19.0
+argparse==1.4.0
+Flask==2.0.1
+matplotlib==3.4.2
