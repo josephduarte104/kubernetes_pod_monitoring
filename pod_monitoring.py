@@ -21,9 +21,11 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 # Load environment variables from .env file
 load_dotenv()
 
+# Set namespace and interval from environment variables
 NAMESPACE = os.getenv('NAMESPACE', 'default')
 INTERVAL = int(os.getenv('INTERVAL', 5))
 
+# Initialize Flask app and SocketIO
 app = Flask(__name__)
 socketio = SocketIO(app)
 
@@ -45,7 +47,7 @@ def setup_logger(log_file):
 
 logger = setup_logger('pod_monitoring.log')
 
-# Convert Kubernetes CPU/memory formats to usable numbers
+# Convert Kubernetes CPU formats to millicores
 def convert_cpu_to_millicores(cpu):
     if cpu.endswith('n'):
         return int(cpu[:-1]) / 1_000_000
@@ -56,6 +58,7 @@ def convert_cpu_to_millicores(cpu):
     else:
         return int(cpu) * 1000
 
+# Convert Kubernetes memory formats to MiB
 def convert_memory_to_mib(memory):
     if memory.endswith('Ki'):
         return int(memory[:-2]) / 1024
@@ -68,6 +71,21 @@ def convert_memory_to_mib(memory):
 
 # Fetch pod metrics from the Kubernetes API
 def get_pod_metrics():
+    """
+    Fetches metrics for all pods in a specified Kubernetes namespace.
+
+    This function loads the Kubernetes configuration, initializes the CustomObjectsApi,
+    and retrieves the CPU and memory usage metrics for each pod in the specified namespace.
+    The metrics are aggregated per pod and returned as a dictionary.
+
+    Returns:
+        dict: A dictionary where the keys are pod names and the values are dictionaries
+              containing 'cpu' (in millicores) and 'memory' (in MiB) usage.
+
+    Raises:
+        Exception: If there is an error fetching the pod metrics, an error is logged and
+                   an empty dictionary is returned.
+    """
     config.load_kube_config()
     custom_api = client.CustomObjectsApi()
     try:
@@ -145,11 +163,12 @@ def live_graph_memory():
     plt.close(fig)  # Close the figure to free memory
     return send_file(img, mimetype='image/png')
 
-
+# Handle SocketIO connection
 @socketio.on('connect')
 def handle_connect():
     emit('response', {'data': 'Connected'})
 
+# Main entry point
 if __name__ == '__main__':
     threading.Thread(target=periodic_update, daemon=True).start()
     socketio.run(app, debug=True)
