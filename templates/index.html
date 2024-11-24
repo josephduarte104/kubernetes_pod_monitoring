@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pod Metrics Dashboard</title>
+</head>
+<body>
+    <h1>Pod Metrics Dashboard</h1>
+    <div class="graphs">
+        <div class="graph-container">
+            <h2>CPU Usage</h2>
+            <img id="cpu-graph" src="/live-graph-cpu" alt="CPU Graph">
+        </div>
+        <div class="graph-container">
+            <h2>Memory Usage</h2>
+            <img id="memory-graph" src="/live-graph-memory" alt="Memory Graph">
+        </div>
+    </div>
+
+    <script>
+        function refreshGraphs() {
+            const timestamp = new Date().getTime();
+            const cpuGraphUrl = `/live-graph-cpu?ts=${timestamp}`;
+            const memoryGraphUrl = `/live-graph-memory?ts=${timestamp}`;
+            console.log('Updating CPU graph URL:', cpuGraphUrl);
+            console.log('Updating Memory graph URL:', memoryGraphUrl);
+            document.getElementById('cpu-graph').src = cpuGraphUrl;
+            document.getElementById('memory-graph').src = memoryGraphUrl;
+        }
+
+        // Auto-refresh graphs every 5 seconds
+        setInterval(refreshGraphs, 5000);
+    </script>
+</body>
+</html>
