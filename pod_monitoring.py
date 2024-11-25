@@ -1,6 +1,5 @@
 import time
 import csv
-import argparse
 from kubernetes import client, config
 import logging
 from logging.handlers import RotatingFileHandler

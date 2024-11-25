@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-monitoring
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-monitoring
+  template:
+    metadata:
+      labels:
+        app: pod-monitoring
+    spec:
+      containers:
+      - name: pod-monitoring
+        image: jduarte104/pod-monitoring:1.0
+        env:
+        - name: NAMESPACE
+          value: "default"
+        - name: INTERVAL
+          value: "15"
+        ports:
+        - containerPort: 5000
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /root/.kube
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: kubeconfig-secret
